@@ -159,7 +159,11 @@ class UserHandle:
         try:
             last_modified = header["Last-Modified"]
             etag = header["ETag"]
-            self._etag_db.insert_one({"uid": uid, "url": url, "Last-Modified": last_modified, "ETag": etag})
+            self._etag_db.update_one(
+                {"uid": uid, "url": url},
+                {"$set": {"uid": uid, "url": url, "Last-Modified": last_modified, "ETag": etag}},
+                upsert=True
+            )
         except KeyError:
             pass
 
