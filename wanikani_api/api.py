@@ -79,7 +79,7 @@ class UserHandle:
         if request.status == 304:
             return user_db.find_one({"tokens": {"$in": [self._token]}})
         user_data = json.loads(request.data.decode("utf-8"))
-        self._set_etag(url, request.headers)
+        self._set_etag(url, request.headers, user_data["data"]["id"])
 
         uid = user_data["data"]["id"]
         user = user_db.find_one({"_id": uid})
@@ -107,13 +107,15 @@ class UserHandle:
         pass
 
     def _get_etag_for_url(self, url: str, headers: Dict):
+        if not hasattr(self, "_user"):
+            return
         uid = self._user["_id"]
         if (data := self._etag_db.find_one({"uid": uid, "url": url})) is not None:
             headers["If-Modified-Since"] = data["Last-Modified"]
             headers["If-None-Match"] = data["ETag"]
 
-    def _set_etag(self, url: str, header: Dict):
-        uid = self._user["_id"]
+    def _set_etag(self, url: str, header: Dict, uid=None):
+        uid = uid or self._user["_id"]
         try:
             last_modified = header["Last-Modified"]
             etag = header["ETag"]
