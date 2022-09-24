@@ -90,6 +90,11 @@ class UserHandle:
         if user is not None:
             if self._token not in user["tokens"]:
                 user_db.update_one({"_id": uid}, {"$push": {"tokens": self._token}})
+            else:
+                # The data was updated
+                user_data["tokens"] = user["tokens"]
+                user_data["_id"] = uid
+                user_db.replace_one({"_id": uid}, user_data)
         else:
             user = user_data
             user["_id"] = uid
