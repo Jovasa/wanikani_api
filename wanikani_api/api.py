@@ -24,6 +24,7 @@ class UserHandle:
             self._user = user
         else:
             self._user = self.get_user()
+        self._personal_cache = self.db[self._user["_id"]]
 
     def get_assignments(self, ids: Union[int, Iterable, None] = None, **kwargs):
         pass
@@ -65,13 +66,36 @@ class UserHandle:
         pass
 
     def get_summary(self):
-        pass
+        url = "https://api.wanikani.com/v2/summary"
+        headers = self._get_header(url)
+        try:
+            request = self._http.request(
+                "GET",
+                url,
+                headers=headers
+            )
+        except HTTPError:
+            # TODO: parameter for whether it is acceptable for the user
+            # to use cached data in case the request failed
+            report = self._personal_cache.find_one({"object": "report"})
+            if report:
+                return report
+            # TODO: This should be custom error
+            raise
+
+        if request.status == 304:
+            return self._personal_cache.find_one({"object": "report"})
+
+        data = json.loads(request.data.decode("utf-8"))
+        self._set_etag(url, request.headers)
+
+        self._personal_cache.update_one({"object": "report"}, {"$set": data}, upsert=True)
+        return data
 
     def get_user(self):
         user_db = self.db["users"]
         url = "https://api.wanikani.com/v2/user"
-        headers = {"Authorization": f"Bearer {self._token}"}
-        self._get_etag_for_url(url, headers)
+        headers = self._get_header(url)
         try:
             request = self._http.request(
                 "GET",
@@ -138,3 +162,8 @@ class UserHandle:
             self._etag_db.insert_one({"uid": uid, "url": url, "Last-Modified": last_modified, "ETag": etag})
         except KeyError:
             pass
+
+    def _get_header(self, url):
+        headers = {"Authorization": f"Bearer {self._token}"}
+        self._get_etag_for_url(url, headers)
+        return headers
