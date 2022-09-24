@@ -6,6 +6,7 @@ from datetime import datetime
 
 import urllib3
 from pymongo import MongoClient
+from urllib3.exceptions import HTTPError
 
 
 class UserHandle:
@@ -71,11 +72,21 @@ class UserHandle:
         url = "https://api.wanikani.com/v2/user"
         headers = {"Authorization": f"Bearer {self._token}"}
         self._get_etag_for_url(url, headers)
-        request = self._http.request(
-            "GET",
-            url,
-            headers=headers
-        )
+        try:
+            request = self._http.request(
+                "GET",
+                url,
+                headers=headers
+            )
+        except HTTPError:
+            # TODO: parameter for whether it is acceptable for the user
+            # to use cached data in case the request failed
+            user = user_db.find_one({"tokens": {"$in": [self._token]}})
+            if user:
+                return user
+            # TODO: This should be custom error
+            raise
+
         if request.status == 304:
             return user_db.find_one({"tokens": {"$in": [self._token]}})
         user_data = json.loads(request.data.decode("utf-8"))
