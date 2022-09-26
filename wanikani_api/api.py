@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import AnyStr, Union, Iterable, Dict
 from datetime import datetime
+from urllib.parse import quote
 
 import urllib3
 from pymongo import MongoClient
@@ -35,7 +36,63 @@ class UserHandle:
     def get_level_progressions(self,
                                ids: [int, Iterable, None] = None,
                                updated_after: Union[datetime, str, None] = None):
-        pass
+        if type(ids) is int and updated_after is None:
+            url = f"https://api.wanikani.com/v2/level_progressions/{ids}"
+            cached = self._personal_cache.find_one({"object": "level_progression", "id": ids})
+        else:
+            url_params = []
+            if ids is not None:
+                if type(ids) is int:
+                    ids = [int]
+                url_params.append(f"ids={','.join(ids)}")
+            if updated_after is not None:
+                if type(updated_after) is str:
+                    updated_after = datetime.fromisoformat(updated_after)
+
+                url_params.append(updated_after.isoformat())
+
+            url = f"https://api.wanikani.com/v2/level_progressions?{'&'.join(quote(x) for x in url_params)}"
+            cached = self._personal_cache.find(
+                {
+                    "object": "level_progression",
+                    "id": {"$in", ids},
+                    "data_updated_at": {"$gte": updated_after}
+                }
+            )
+
+        data_out = []
+        while url:
+            headers = self._get_header(url)
+
+            request = self._http.request(
+                "GET",
+                url,
+                headers=headers
+            )
+
+            # Technically this could cause issues if the first url would not have 304
+            # but the second does have, but I don't think that is a feasible case in
+            # real world. Like the API should return 200 for all the data.
+            if request.status == 304:
+                print("Was cached")
+                return cached
+
+            data = json.loads(request.data.decode("utf-8"))
+            self._set_etag(url, request.headers)
+
+            if "pages" in data:
+                data_out.extend(data["data"])
+                url = data["pages"]["next_url"]
+            else:
+                data["data_updated_at"] = datetime.fromisoformat(data["data_updated_at"].replace("Z", "+00:00"))
+                return data
+
+        for item in data_out:
+            item["data_updated_at"] = datetime.fromisoformat(item["data_updated_at"].replace("Z", "+00:00"))
+        self._personal_cache.update_many({"object": "level_progression", "id": {"$in": [x["id"] for x in data_out]}},
+                                         [{"$set": item} for item in data_out],
+                                         upsert=True)
+        return data_out
 
     def get_resets(self, ids: [int, Iterable, None] = None, updated_after: Union[datetime, str, None] = None):
         pass
