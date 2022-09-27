@@ -36,64 +36,11 @@ class UserHandle:
     def get_level_progressions(self,
                                ids: [int, Iterable, None] = None,
                                updated_after: Union[datetime, str, None] = None):
-        if type(ids) is int and updated_after is None:
-            url = f"https://api.wanikani.com/v2/level_progressions/{ids}"
-            cached = self._personal_cache.find_one({"object": "level_progression", "id": ids})
-        else:
-            url_params = []
-            filter_args = {"object": "level_progression"}
-            if ids is not None:
-                if type(ids) is int:
-                    ids = [int]
-                url_params.append(f"ids={','.join(ids)}")
-                filter_args["id"] = {"$in", ids}
-            if updated_after is not None:
-                if type(updated_after) is str:
-                    updated_after = datetime.fromisoformat(updated_after)
-
-                url_params.append(updated_after.isoformat())
-                filter_args["data_updated_at"] = {"$gte": updated_after}
-
-            url = f"https://api.wanikani.com/v2/level_progressions?{'&'.join(quote(x) for x in url_params)}"
-
-            cached = self._personal_cache.find(filter_args)
-
-        data_out = []
-        while url:
-            headers = self._get_header(url)
-
-            request = self._http.request(
-                "GET",
-                url,
-                headers=headers
-            )
-
-            # Technically this could cause issues if the first url would not have 304
-            # but the second does have, but I don't think that is a feasible case in
-            # real world. Like the API should return 200 for all the data.
-            if request.status == 304:
-                print("Was cached")
-                return cached
-
-            data = json.loads(request.data.decode("utf-8"))
-            self._set_etag(url, request.headers)
-
-            if "pages" in data:
-                data_out.extend(data["data"])
-                url = data["pages"]["next_url"]
-            else:
-                data["data_updated_at"] = datetime.fromisoformat(data["data_updated_at"].replace("Z", "+00:00"))
-                return data
-
-        for item in data_out:
-            item["data_updated_at"] = datetime.fromisoformat(item["data_updated_at"].replace("Z", "+00:00"))
-            self._personal_cache.update_one({"object": "level_progression", "id": item["id"]},
-                                            {"$set": item},
-                                            upsert=True)
-        return data_out
+        request_type = "level_progression"
+        return self._ids_updated_after_request(ids, updated_after, request_type)
 
     def get_resets(self, ids: [int, Iterable, None] = None, updated_after: Union[datetime, str, None] = None):
-        pass
+        return self._ids_updated_after_request(ids, updated_after, "reset")
 
     def get_reviews(self, ids: Union[int, Iterable, None] = None, **kwargs):
         pass
@@ -106,7 +53,7 @@ class UserHandle:
         pass
 
     def get_srs_systems(self, ids: Union[int, Iterable, None] = None, updated_after: Union[datetime, str, None] = None):
-        pass
+        return self._ids_updated_after_request(ids, updated_after, "spaced_repetition_system")
 
     def get_study_materials(self, ids: Union[int, Iterable, None] = None, **kwargs):
         pass
@@ -199,7 +146,7 @@ class UserHandle:
     def get_voice_actors(self,
                          ids: Union[int, Iterable, None] = None,
                          updated_after: Union[datetime, str, None] = None):
-        pass
+        return self._ids_updated_after_request(ids, updated_after, "voice_actor")
 
     def _get_etag_for_url(self, url: str, headers: Dict):
         if not hasattr(self, "_user"):
@@ -226,3 +173,64 @@ class UserHandle:
         headers = {"Authorization": f"Bearer {self._token}"}
         self._get_etag_for_url(url, headers)
         return headers
+
+    def _ids_updated_after_request(self,
+                                   ids: Union[int, Iterable, None],
+                                   updated_after: Union[datetime, str, None],
+                                   request_type: str):
+        if type(ids) is int and updated_after is None:
+            url = f"https://api.wanikani.com/v2/{request_type}s/{ids}"
+            cached = self._personal_cache.find_one({"object": request_type, "id": ids})
+        else:
+            url_params = []
+            filter_args = {"object": request_type}
+            if ids is not None:
+                if type(ids) is int:
+                    ids = [int]
+                url_params.append(f"ids={','.join(ids)}")
+                filter_args["id"] = {"$in", ids}
+            if updated_after is not None:
+                if type(updated_after) is str:
+                    updated_after = datetime.fromisoformat(updated_after)
+
+                url_params.append(updated_after.isoformat())
+                filter_args["data_updated_at"] = {"$gte": updated_after}
+
+            params_string = '&'.join(quote(x) for x in url_params)
+            url = f"https://api.wanikani.com/v2/{request_type}s{'?' if url_params else ''}{params_string}"
+
+            cached = self._personal_cache.find(filter_args)
+
+        data_out = []
+        while url:
+            headers = self._get_header(url)
+
+            request = self._http.request(
+                "GET",
+                url,
+                headers=headers
+            )
+
+            # Technically this could cause issues if the first url would not have 304
+            # but the second does have, but I don't think that is a feasible case in
+            # real world. Like the API should return 200 for all the data.
+            if request.status == 304:
+                print("Was cached")
+                return cached
+
+            data = json.loads(request.data.decode("utf-8"))
+            self._set_etag(url, request.headers)
+
+            if "pages" in data:
+                data_out.extend(data["data"])
+                url = data["pages"]["next_url"]
+            else:
+                data["data_updated_at"] = datetime.fromisoformat(data["data_updated_at"].replace("Z", "+00:00"))
+                return data
+
+        for item in data_out:
+            item["data_updated_at"] = datetime.fromisoformat(item["data_updated_at"].replace("Z", "+00:00"))
+            self._personal_cache.update_one({"object": request_type, "id": item["id"]},
+                                            {"$set": item},
+                                            upsert=True)
+        return data_out
