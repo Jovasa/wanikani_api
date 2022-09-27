@@ -41,24 +41,22 @@ class UserHandle:
             cached = self._personal_cache.find_one({"object": "level_progression", "id": ids})
         else:
             url_params = []
+            filter_args = {"object": "level_progression"}
             if ids is not None:
                 if type(ids) is int:
                     ids = [int]
                 url_params.append(f"ids={','.join(ids)}")
+                filter_args["id"] = {"$in", ids}
             if updated_after is not None:
                 if type(updated_after) is str:
                     updated_after = datetime.fromisoformat(updated_after)
 
                 url_params.append(updated_after.isoformat())
+                filter_args["data_updated_at"] = {"$gte": updated_after}
 
             url = f"https://api.wanikani.com/v2/level_progressions?{'&'.join(quote(x) for x in url_params)}"
-            cached = self._personal_cache.find(
-                {
-                    "object": "level_progression",
-                    "id": {"$in", ids},
-                    "data_updated_at": {"$gte": updated_after}
-                }
-            )
+
+            cached = self._personal_cache.find(filter_args)
 
         data_out = []
         while url:
@@ -89,9 +87,9 @@ class UserHandle:
 
         for item in data_out:
             item["data_updated_at"] = datetime.fromisoformat(item["data_updated_at"].replace("Z", "+00:00"))
-        self._personal_cache.update_many({"object": "level_progression", "id": {"$in": [x["id"] for x in data_out]}},
-                                         [{"$set": item} for item in data_out],
-                                         upsert=True)
+            self._personal_cache.update_one({"object": "level_progression", "id": item["id"]},
+                                            {"$set": item},
+                                            upsert=True)
         return data_out
 
     def get_resets(self, ids: [int, Iterable, None] = None, updated_after: Union[datetime, str, None] = None):
