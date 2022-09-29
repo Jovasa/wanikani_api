@@ -226,6 +226,9 @@ class UserHandle:
                 url = data["pages"]["next_url"]
             else:
                 data["data_updated_at"] = datetime.fromisoformat(data["data_updated_at"].replace("Z", "+00:00"))
+                self._personal_cache.update_one({"object": request_type, "id": data["id"]},
+                                                {"$set": data},
+                                                upsert=True)
                 return data
 
         for item in data_out:
