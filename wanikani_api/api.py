@@ -193,7 +193,7 @@ class UserHandle:
                 if type(updated_after) is str:
                     updated_after = datetime.fromisoformat(updated_after)
 
-                url_params.append(updated_after.isoformat())
+                url_params.append(f"updated_after={updated_after.isoformat()}")
                 filter_args["data_updated_at"] = {"$gte": updated_after}
 
             params_string = '&'.join(quote(x) for x in url_params)
@@ -234,3 +234,45 @@ class UserHandle:
                                             {"$set": item},
                                             upsert=True)
         return data_out
+
+    @staticmethod
+    def parse_query_parameters(url_params: list, filter_params: dict, **kwargs):
+        filter_params["data"] = {}
+        for param, value in kwargs:
+            if param == "immediately_available_for_lessons":
+                url_params.append(param)
+                filter_params["data"]["unlocked_at"] = {"$lte": datetime.now()}
+                filter_params["data"]["started_at"] = None
+            elif param == "immediately_available_for_review":
+                filter_params["data"]["available_at"] = {"$lte": datetime.now()}
+            elif param == "in_review":
+                filter_params["data"]["available_at"] = {"$not": None}
+            if "before" in param or "after" in param:
+                if type(value) is str:
+                    value = datetime.fromisoformat(value)
+                url_params.append(f"{param}={value}")
+                if param == "updated_after":
+                    filter_params["updated_at"] = {"$gte": value}
+                elif all([x in kwargs for x in ["available_before", "updated_after"]]):
+                    after = kwargs["available_after"]
+                    before = kwargs["available_before"]
+                    filter_params["data"]["available_at"] = {
+                        "$gte": datetime.fromisoformat(after) if type(after) is str else after,
+                        "$lte": datetime.fromisoformat(before) if type(before) is str else before,
+                    }
+                elif param == "available_after":
+                    filter_params["data"]["available_at"] = {"$gte": value}
+                elif param == "available_before":
+                    filter_params["data"]["available_at"] = {"$lte": value}
+            if type(value) in [str, int]:
+                value = [value]
+
+            if type(value) is bool:
+                url_params.append(f"{param}={value}")
+                filter_params[param] = {"$not": None} if value else None
+            else:
+                url_params.append(f"{param}={','.join(value)}")
+                if param == "ids":
+                    filter_params["id"] = {"$in": value}
+                elif param != "levels":
+                    filter_params["data"][param[0:-1]] = {"$in": value}
