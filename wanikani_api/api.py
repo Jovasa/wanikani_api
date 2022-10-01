@@ -66,43 +66,7 @@ class UserHandle:
         if can_use_cache:
             cached = self._personal_cache.find(filter_args)
 
-        data_out = []
-        while url:
-            headers = self._get_header(url)
-
-            request = self._http.request(
-                "GET",
-                url,
-                headers=headers
-            )
-
-            # Technically this could cause issues if the first url would not have 304
-            # but the second does have, but I don't think that is a feasible case in
-            # real world. Like the API should return 200 for all the data.
-            if request.status == 304:
-                print("Was cached")
-                return cached
-
-            data = json.loads(request.data.decode("utf-8"))
-            if can_use_cache:
-                self._set_etag(url, request.headers)
-
-            if not is_singular:
-                data_out.extend(data["data"])
-                url = data["pages"]["next_url"]
-            else:
-                self._convert_dates(data)
-                self._personal_cache.update_one({"object": "assignment", "id": data["id"]},
-                                                {"$set": data},
-                                                upsert=True)
-                return data
-
-        for item in data_out:
-            self._convert_dates(item)
-            self._personal_cache.update_one({"object": "assignment", "id": item["id"]},
-                                            {"$set": item},
-                                            upsert=True)
-        return data_out
+        return self._do_requests(cached, "assignment", url, can_use_cache)
 
     def start_assignment(self, sid: int, started_at: Union[datetime, str, None] = None):
         pass
@@ -275,6 +239,9 @@ class UserHandle:
 
             cached = self._personal_cache.find(filter_args)
 
+        return self._do_requests(cached, request_type, url)
+
+    def _do_requests(self, cached, request_type, url, can_use_cache=True):
         data_out = []
         while url:
             headers = self._get_header(url)
@@ -293,7 +260,8 @@ class UserHandle:
                 return cached
 
             data = json.loads(request.data.decode("utf-8"))
-            self._set_etag(url, request.headers)
+            if can_use_cache:
+                self._set_etag(url, request.headers)
 
             if "pages" in data:
                 data_out.extend(data["data"])
@@ -304,7 +272,6 @@ class UserHandle:
                                                 {"$set": data},
                                                 upsert=True)
                 return data
-
         for item in data_out:
             self._convert_dates(item)
             self._personal_cache.update_one({"object": request_type, "id": item["id"]},
