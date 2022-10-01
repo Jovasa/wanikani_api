@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import AnyStr, Union, Iterable, Dict
+from typing import AnyStr, Union, Iterable, Dict, List
 from datetime import datetime
 from urllib.parse import quote
 
@@ -27,8 +27,82 @@ class UserHandle:
             self._user = self.get_user()
         self._personal_cache = self.db[self._user["_id"]]
 
-    def get_assignments(self, ids: Union[int, Iterable, None] = None, **kwargs):
-        pass
+    def get_assignments(self,
+                        *,
+                        ids: Union[int, Iterable, None] = None,
+                        available_after: Union[datetime, str, None] = None,
+                        available_before: Union[datetime, str, None] = None,
+                        burned: Union[bool, None] = None,
+                        hidden: Union[bool, None] = None,
+                        immediately_available_for_lessons: Union[bool, None] = None,
+                        immediately_available_for_review: Union[bool, None] = None,
+                        in_review: Union[bool, None] = None,
+                        levels: Union[List[int], None] = None,
+                        srs_stages: Union[List[int], None] = None,
+                        started: Union[bool, None] = None,
+                        subject_ids: Union[List[int], None] = None,
+                        subject_types: Union[List[str], None] = None,
+                        unlocked: Union[bool, None] = None,
+                        updated_after: Union[datetime, str, None] = None):
+        url_params = []
+        filter_args = {"object": "assignment"}
+        local_args = locals()
+        self.parse_query_parameters(url_params,
+                                    filter_args,
+                                    **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
+
+        is_singular = type(ids) is int and len(url_params) == 1
+        if not is_singular:
+            params_string = '&'.join(url_params)
+            url = f"https://api.wanikani.com/v2/assignments{'?' if url_params else ''}{params_string}"
+        else:
+            url = f"https://api.wanikani.com/v2/assignments/{ids}"
+
+        cached = None
+        can_use_cache = levels is None and \
+                        immediately_available_for_lessons is None and \
+                        immediately_available_for_review is None and \
+                        in_review is None
+        if can_use_cache:
+            cached = self._personal_cache.find(filter_args)
+
+        data_out = []
+        while url:
+            headers = self._get_header(url)
+
+            request = self._http.request(
+                "GET",
+                url,
+                headers=headers
+            )
+
+            # Technically this could cause issues if the first url would not have 304
+            # but the second does have, but I don't think that is a feasible case in
+            # real world. Like the API should return 200 for all the data.
+            if request.status == 304:
+                print("Was cached")
+                return cached
+
+            data = json.loads(request.data.decode("utf-8"))
+            if can_use_cache:
+                self._set_etag(url, request.headers)
+
+            if not is_singular:
+                data_out.extend(data["data"])
+                url = data["pages"]["next_url"]
+            else:
+                data["data_updated_at"] = datetime.fromisoformat(data["data_updated_at"].replace("Z", "+00:00"))
+                self._personal_cache.update_one({"object": "assignment", "id": data["id"]},
+                                                {"$set": data},
+                                                upsert=True)
+                return data
+
+        for item in data_out:
+            item["data_updated_at"] = datetime.fromisoformat(item["data_updated_at"].replace("Z", "+00:00"))
+            self._personal_cache.update_one({"object": "assignment", "id": item["id"]},
+                                            {"$set": item},
+                                            upsert=True)
+        return data_out
 
     def start_assignment(self, sid: int, started_at: Union[datetime, str, None] = None):
         pass
@@ -187,16 +261,16 @@ class UserHandle:
             if ids is not None:
                 if type(ids) is int:
                     ids = [int]
-                url_params.append(f"ids={','.join(ids)}")
+                url_params.append(f"ids={','.join(str(x) for x in ids)}")
                 filter_args["id"] = {"$in", ids}
             if updated_after is not None:
                 if type(updated_after) is str:
                     updated_after = datetime.fromisoformat(updated_after)
 
-                url_params.append(f"updated_after={updated_after.isoformat()}")
+                url_params.append(f"updated_after={quote(updated_after.isoformat())}")
                 filter_args["data_updated_at"] = {"$gte": updated_after}
 
-            params_string = '&'.join(quote(x) for x in url_params)
+            params_string = '&'.join(url_params)
             url = f"https://api.wanikani.com/v2/{request_type}s{'?' if url_params else ''}{params_string}"
 
             cached = self._personal_cache.find(filter_args)
@@ -241,41 +315,50 @@ class UserHandle:
     @staticmethod
     def parse_query_parameters(url_params: list, filter_params: dict, **kwargs):
         filter_params["data"] = {}
-        for param, value in kwargs:
+        for param, value in kwargs.items():
+            if value is None:
+                continue
             if param == "immediately_available_for_lessons":
                 url_params.append(param)
                 filter_params["data"]["unlocked_at"] = {"$lte": datetime.now()}
                 filter_params["data"]["started_at"] = None
             elif param == "immediately_available_for_review":
+                url_params.append(param)
                 filter_params["data"]["available_at"] = {"$lte": datetime.now()}
             elif param == "in_review":
+                url_params.append(param)
                 filter_params["data"]["available_at"] = {"$not": None}
-            if "before" in param or "after" in param:
-                if type(value) is str:
-                    value = datetime.fromisoformat(value)
-                url_params.append(f"{param}={value}")
-                if param == "updated_after":
-                    filter_params["updated_at"] = {"$gte": value}
-                elif all([x in kwargs for x in ["available_before", "updated_after"]]):
-                    after = kwargs["available_after"]
-                    before = kwargs["available_before"]
-                    filter_params["data"]["available_at"] = {
-                        "$gte": datetime.fromisoformat(after) if type(after) is str else after,
-                        "$lte": datetime.fromisoformat(before) if type(before) is str else before,
-                    }
-                elif param == "available_after":
-                    filter_params["data"]["available_at"] = {"$gte": value}
-                elif param == "available_before":
-                    filter_params["data"]["available_at"] = {"$lte": value}
-            if type(value) in [str, int]:
-                value = [value]
-
-            if type(value) is bool:
-                url_params.append(f"{param}={value}")
-                filter_params[param] = {"$not": None} if value else None
             else:
-                url_params.append(f"{param}={','.join(value)}")
-                if param == "ids":
-                    filter_params["id"] = {"$in": value}
-                elif param != "levels":
-                    filter_params["data"][param[0:-1]] = {"$in": value}
+                if "before" in param or "after" in param:
+                    if type(value) is str:
+                        value = datetime.fromisoformat(value)
+                    print(value.isoformat())
+                    url_params.append(f"{param}={quote(value.isoformat())}")
+
+                    if param == "updated_after":
+                        filter_params["data_updated_at"] = {"$gte": value}
+                    elif all([x in kwargs for x in ["available_before", "updated_after"]]):
+                        after = kwargs["available_after"]
+                        before = kwargs["available_before"]
+                        filter_params["data"]["available_at"] = {
+                            "$gte": datetime.fromisoformat(after) if type(after) is str else after,
+                            "$lte": datetime.fromisoformat(before) if type(before) is str else before,
+                        }
+                    elif param == "available_after":
+                        filter_params["data"]["available_at"] = {"$gte": value}
+                    elif param == "available_before":
+                        filter_params["data"]["available_at"] = {"$lte": value}
+                    continue
+
+                if type(value) in [str, int]:
+                    value = [value]
+
+                if type(value) is bool:
+                    url_params.append(f"{param}={value}")
+                    filter_params[param] = {"$not": None} if value else None
+                else:
+                    url_params.append(f"{param}={','.join(str(x) for x in value)}")
+                    if param == "ids":
+                        filter_params["id"] = {"$in": value}
+                    elif param != "levels":
+                        filter_params["data"][param[0:-1]] = {"$in": value}
