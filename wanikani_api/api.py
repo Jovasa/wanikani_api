@@ -47,9 +47,9 @@ class UserHandle:
         url_params = []
         filter_args = {"object": "assignment"}
         local_args = locals()
-        self.parse_query_parameters(url_params,
-                                    filter_args,
-                                    **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
+        self._parse_query_parameters(url_params,
+                                     filter_args,
+                                     **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
         is_singular = type(ids) is int and len(url_params) == 1
         if not is_singular:
@@ -91,14 +91,14 @@ class UserHandle:
                 data_out.extend(data["data"])
                 url = data["pages"]["next_url"]
             else:
-                data["data_updated_at"] = datetime.fromisoformat(data["data_updated_at"].replace("Z", "+00:00"))
+                self._convert_dates(data)
                 self._personal_cache.update_one({"object": "assignment", "id": data["id"]},
                                                 {"$set": data},
                                                 upsert=True)
                 return data
 
         for item in data_out:
-            item["data_updated_at"] = datetime.fromisoformat(item["data_updated_at"].replace("Z", "+00:00"))
+            self._convert_dates(item)
             self._personal_cache.update_one({"object": "assignment", "id": item["id"]},
                                             {"$set": item},
                                             upsert=True)
@@ -299,21 +299,21 @@ class UserHandle:
                 data_out.extend(data["data"])
                 url = data["pages"]["next_url"]
             else:
-                data["data_updated_at"] = datetime.fromisoformat(data["data_updated_at"].replace("Z", "+00:00"))
+                self._convert_dates(data)
                 self._personal_cache.update_one({"object": request_type, "id": data["id"]},
                                                 {"$set": data},
                                                 upsert=True)
                 return data
 
         for item in data_out:
-            item["data_updated_at"] = datetime.fromisoformat(item["data_updated_at"].replace("Z", "+00:00"))
+            self._convert_dates(item)
             self._personal_cache.update_one({"object": request_type, "id": item["id"]},
                                             {"$set": item},
                                             upsert=True)
         return data_out
 
     @staticmethod
-    def parse_query_parameters(url_params: list, filter_params: dict, **kwargs):
+    def _parse_query_parameters(url_params: list, filter_params: dict, **kwargs):
         filter_params["data"] = {}
         for param, value in kwargs.items():
             if value is None:
@@ -362,3 +362,10 @@ class UserHandle:
                         filter_params["id"] = {"$in": value}
                     elif param != "levels":
                         filter_params["data"][param[0:-1]] = {"$in": value}
+
+    @staticmethod
+    def _convert_dates(obj: dict):
+        obj["data_updated_at"] = datetime.fromisoformat(obj["data_updated_at"].replace("Z", "+00:00"))
+        for key, value in obj["data"].items():
+            if key.endswith("_at") and value is not None:
+                obj["data"][key] = datetime.fromisoformat(obj["data"][key].replace("Z", "+00:00"))
