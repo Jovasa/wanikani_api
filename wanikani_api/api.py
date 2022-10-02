@@ -44,29 +44,8 @@ class UserHandle:
                         subject_types: Union[List[str], None] = None,
                         unlocked: Union[bool, None] = None,
                         updated_after: Union[datetime, str, None] = None):
-        url_params = []
-        filter_args = {"object": "assignment"}
         local_args = locals()
-        self._parse_query_parameters(url_params,
-                                     filter_args,
-                                     **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
-
-        is_singular = type(ids) is int and len(url_params) == 1
-        if not is_singular:
-            params_string = '&'.join(url_params)
-            url = f"https://api.wanikani.com/v2/assignments{'?' if url_params else ''}{params_string}"
-        else:
-            url = f"https://api.wanikani.com/v2/assignments/{ids}"
-
-        cached = None
-        can_use_cache = levels is None and \
-                        immediately_available_for_lessons is None and \
-                        immediately_available_for_review is None and \
-                        in_review is None
-        if can_use_cache:
-            cached = self._personal_cache.find(filter_args)
-
-        return self._do_requests(cached, "assignment", url, can_use_cache)
+        return self._complex_request("assignment", **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
     def start_assignment(self, sid: int, started_at: Union[datetime, str, None] = None):
         pass
@@ -80,21 +59,45 @@ class UserHandle:
     def get_resets(self, ids: [int, Iterable, None] = None, updated_after: Union[datetime, str, None] = None):
         return self._ids_updated_after_request(ids, updated_after, "reset")
 
-    def get_reviews(self, ids: Union[int, Iterable, None] = None, **kwargs):
-        pass
+    def get_reviews(self,
+                    *,
+                    ids: Union[int, Iterable, None] = None,
+                    assignment_ids: Union[List[int], None] = None,
+                    subject_ids: Union[List[int], None] = None,
+                    updated_after: Union[datetime, str, None] = None):
+        local_args = locals()
+        return self._complex_request("review", **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
     def create_review(self, aid: Union[int, None] = None, sid: Union[int, None] = None, **kwargs):
         assert aid is not None or sid is not None
         pass
 
-    def get_review_statistics(self, ids: Union[int, Iterable, None] = None, **kwargs):
-        pass
+    def get_review_statistics(self,
+                              *,
+                              ids: Union[int, Iterable, None] = None,
+                              hidden: Union[bool, None] = None,
+                              percentages_greater_than: Union[int, None] = None,
+                              percentages_less_than: Union[int, None] = None,
+                              subject_ids: Union[List[int], None] = None,
+                              subject_types: Union[List[str], None] = None,
+                              updated_after: Union[datetime, str, None] = None):
+        local_args = locals()
+        return self._complex_request("review_statistic",
+                                     **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
     def get_srs_systems(self, ids: Union[int, Iterable, None] = None, updated_after: Union[datetime, str, None] = None):
         return self._ids_updated_after_request(ids, updated_after, "spaced_repetition_system")
 
-    def get_study_materials(self, ids: Union[int, Iterable, None] = None, **kwargs):
-        pass
+    def get_study_materials(self,
+                            *,
+                            ids: Union[int, Iterable, None] = None,
+                            hidden: Union[bool, None] = None,
+                            subject_ids: Union[List[int], None] = None,
+                            subject_types: Union[List[str], None] = None,
+                            updated_after: Union[datetime, str, None] = None):
+        local_args = locals()
+        return self._complex_request("study_material",
+                                     **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
     def create_study_material(self, sid: int, **kwargs):
         pass
@@ -241,6 +244,36 @@ class UserHandle:
 
         return self._do_requests(cached, request_type, url)
 
+    def _complex_request(self, request_type, **kwargs):
+        url_params = []
+        filter_args = {"object": request_type}
+        local_args = locals()
+        self._parse_query_parameters(url_params,
+                                     filter_args,
+                                     **kwargs)
+
+        is_singular = "ids" in kwargs and type(kwargs["ids"]) is int and len(url_params) == 1
+        if not is_singular:
+            params_string = '&'.join(url_params)
+            url = f"https://api.wanikani.com/v2/{request_type}s{'?' if url_params else ''}{params_string}"
+        else:
+            url = f"https://api.wanikani.com/v2/{request_type}s/{ids}"
+
+        cached = None
+        can_use_cache = ("levels" not in kwargs or kwargs["levels"] is None) and \
+                        ("immediately_available_for_lessons" not in kwargs or kwargs[
+                            "immediately_available_for_lessons"] is None) and \
+                        ("immediately_available_for_review" not in kwargs or kwargs[
+                            "immediately_available_for_review"] is None) and \
+                        ("in_review" not in kwargs or kwargs["in_review"] is None)
+        if can_use_cache:
+            if is_singular:
+                cached = self._personal_cache.find_one(filter_args)
+            else:
+                cached = self._personal_cache.find(filter_args)
+
+        return self._do_requests(cached, request_type, url, can_use_cache)
+
     def _do_requests(self, cached, request_type, url, can_use_cache=True):
         data_out = []
         while url:
@@ -299,7 +332,6 @@ class UserHandle:
                 if "before" in param or "after" in param:
                     if type(value) is str:
                         value = datetime.fromisoformat(value)
-                    print(value.isoformat())
                     url_params.append(f"{param}={quote(value.isoformat())}")
 
                     if param == "updated_after":
@@ -315,6 +347,21 @@ class UserHandle:
                         filter_params["data"]["available_at"] = {"$gte": value}
                     elif param == "available_before":
                         filter_params["data"]["available_at"] = {"$lte": value}
+                    continue
+
+                if "percentage" in param:
+                    if "percentages_greater_than" in kwargs and "percentages_less_than" in kwargs:
+                        upper = kwargs["percentages_less_than"]
+                        lower = kwargs["percentages_greater_than"]
+                        filter_params["data"]["available_at"] = {
+                            "$gt": lower,
+                            "$lt": upper,
+                        }
+                    elif param == "percentages_less_than":
+                        filter_params["data"]["available_at"] = {"$lt": kwargs["percentages_less_than"], }
+
+                    elif param == "percentages_greater_than":
+                        filter_params["data"]["available_at"] = {"$gt": kwargs["percentages_greater_than"], }
                     continue
 
                 if type(value) in [str, int]:
