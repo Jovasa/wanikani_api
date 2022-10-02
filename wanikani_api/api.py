@@ -257,7 +257,7 @@ class UserHandle:
             params_string = '&'.join(url_params)
             url = f"https://api.wanikani.com/v2/{request_type}s{'?' if url_params else ''}{params_string}"
         else:
-            url = f"https://api.wanikani.com/v2/{request_type}s/{ids}"
+            url = f"https://api.wanikani.com/v2/{request_type}s/{kwargs['ids']}"
 
         cached = None
         can_use_cache = ("levels" not in kwargs or kwargs["levels"] is None) and \
