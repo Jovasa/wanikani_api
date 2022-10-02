@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pprint
 from typing import AnyStr, Union, Iterable, Dict, List
 from datetime import datetime
 from urllib.parse import quote
@@ -19,6 +20,7 @@ class UserHandle:
         self._token = token
         self._http = urllib3.PoolManager()
         self._etag_db = self.db["ETag"]
+        self._subject_cache = self.db["subjects"]
         users_db = self.db["users"]
         user = users_db.find_one({"tokens": {"$in": [token]}})
         if user is not None:
@@ -105,8 +107,99 @@ class UserHandle:
     def update_study_material(self, sid: int, **kwargs):
         pass
 
-    def get_subjects(self, ids: Union[int, Iterable, None] = None, **kwargs):
-        pass
+    def get_subjects(self,
+                     *,
+                     ids: Union[int, Iterable, None] = None,
+                     types: Union[List[str], None] = None,
+                     slugs: Union[List[str], None] = None,
+                     levels: Union[List[int], None] = None,
+                     hidden: Union[bool, None] = None,
+                     updated_after: Union[datetime, str, None] = None):
+        url_params = []
+        filter_args = {
+            "data": {},
+            "object": {"$in": ["kanji", "vocabulary", "radical"] if types is None else types}
+        }
+        if types is not None:
+            url_params.append(f"types={','.join(types)}")
+        if levels is not None:
+            url_params.append(f"levels={','.join([str(x) for x in levels])}")
+            filter_args["data"]["level"] = {"$in": levels}
+        if ids is not None:
+            temp = ids
+            if type(ids) is int:
+                temp = [ids]
+            url_params.append(f"ids={','.join([str(x) for x in temp])}")
+            filter_args["id"] = {"$in": temp}
+        if slugs is not None:
+            url_params.append(f"slugs={','.join(slugs)}")
+            filter_args["data"]["slug"] = {"$in": slugs}
+        if hidden is not None:
+            url_params.append(f"hidden={str(hidden).lower()}")
+            filter_args["data"]["hidden_at"] = None if not hidden else {"$not": None}
+        if updated_after is not None:
+            if type(updated_after) is str:
+                updated_after = datetime.fromisoformat(updated_after)
+            url_params.append(f"updated_after={quote(updated_after.isoformat())}")
+            filter_args["data_updated_at"] = {"$gte": updated_after}
+
+        is_singular = type(ids) is int and len(url_params) == 1
+        if not is_singular:
+            params_string = '&'.join(url_params)
+            url = f"https://api.wanikani.com/v2/subjects{'?' if url_params else ''}{params_string}"
+            cached = self._subject_cache.find(filter_args)
+        else:
+            url = f"https://api.wanikani.com/v2/subjects/{ids}"
+            cached = self._subject_cache.find_one(filter_args)
+
+        data_out = []
+        while url:
+            headers = {"Authorization": f"Bearer {self._token}"}
+            if (etags := self._etag_db.find_one({"url": url})) is not None:
+                headers["If-Modified-Since"] = etags["Last-Modified"]
+                headers["If-None-Match"] = etags["ETag"]
+
+            request = self._http.request(
+                "GET",
+                url,
+                headers=headers
+            )
+
+            # Technically this could cause issues if the first url would not have 304
+            # but the second does have, but I don't think that is a feasible case in
+            # real world. Like the API should return 200 for all the data.
+            if request.status == 304:
+                return cached
+
+            data = json.loads(request.data.decode("utf-8"))
+            pprint.pprint(request.headers)
+
+            try:
+                last_modified = request.headers["Last-Modified"]
+                etag = request.headers["ETag"]
+                self._etag_db.update_one(
+                    {"url": url},
+                    {"$set": {"url": url, "Last-Modified": last_modified, "ETag": etag}},
+                    upsert=True
+                )
+            except KeyError:
+                pass
+
+            if "pages" in data:
+                data_out.extend(data["data"])
+                url = data["pages"]["next_url"]
+            else:
+                self._convert_dates(data)
+                self._subject_cache.update_one({"object": data["object"], "id": data["id"]},
+                                               {"$set": data},
+                                               upsert=True)
+                return data
+        for item in data_out:
+            self._convert_dates(item)
+            self._subject_cache.update_one({"object": item["object"], "id": item["id"]},
+                                           {"$set": item},
+                                           upsert=True)
+        return data_out
 
     def get_summary(self):
         url = "https://api.wanikani.com/v2/summary"
@@ -368,7 +461,7 @@ class UserHandle:
                     value = [value]
 
                 if type(value) is bool:
-                    url_params.append(f"{param}={value}")
+                    url_params.append(f"{param}={str(value).lower()}")
                     filter_params[param] = {"$not": None} if value else None
                 else:
                     url_params.append(f"{param}={','.join(str(x) for x in value)}")
