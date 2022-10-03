@@ -117,14 +117,13 @@ class UserHandle:
                      updated_after: Union[datetime, str, None] = None):
         url_params = []
         filter_args = {
-            "data": {},
             "object": {"$in": ["kanji", "vocabulary", "radical"] if types is None else types}
         }
         if types is not None:
             url_params.append(f"types={','.join(types)}")
         if levels is not None:
             url_params.append(f"levels={','.join([str(x) for x in levels])}")
-            filter_args["data"]["level"] = {"$in": levels}
+            filter_args["data.level"] = {"$in": levels}
         if ids is not None:
             temp = ids
             if type(ids) is int:
@@ -133,10 +132,10 @@ class UserHandle:
             filter_args["id"] = {"$in": temp}
         if slugs is not None:
             url_params.append(f"slugs={','.join(slugs)}")
-            filter_args["data"]["slug"] = {"$in": slugs}
+            filter_args["data.slug"] = {"$in": slugs}
         if hidden is not None:
             url_params.append(f"hidden={str(hidden).lower()}")
-            filter_args["data"]["hidden_at"] = None if not hidden else {"$not": None}
+            filter_args["data.hidden_at"] = None if not hidden else {"$ne": None}
         if updated_after is not None:
             if type(updated_after) is str:
                 updated_after = datetime.fromisoformat(updated_after)
@@ -413,14 +412,14 @@ class UserHandle:
                 continue
             if param == "immediately_available_for_lessons":
                 url_params.append(param)
-                filter_params["data"]["unlocked_at"] = {"$lte": datetime.now()}
-                filter_params["data"]["started_at"] = None
+                filter_params["data.unlocked_at"] = {"$lte": datetime.now()}
+                filter_params["data.started_at"] = None
             elif param == "immediately_available_for_review":
                 url_params.append(param)
-                filter_params["data"]["available_at"] = {"$lte": datetime.now()}
+                filter_params["data.available_at"] = {"$lte": datetime.now()}
             elif param == "in_review":
                 url_params.append(param)
-                filter_params["data"]["available_at"] = {"$not": None}
+                filter_params["data.available_at"] = {"$ne": None}
             else:
                 if "before" in param or "after" in param:
                     if type(value) is str:
@@ -432,29 +431,29 @@ class UserHandle:
                     elif all([x in kwargs for x in ["available_before", "updated_after"]]):
                         after = kwargs["available_after"]
                         before = kwargs["available_before"]
-                        filter_params["data"]["available_at"] = {
+                        filter_params["data.available_at"] = {
                             "$gte": datetime.fromisoformat(after) if type(after) is str else after,
                             "$lte": datetime.fromisoformat(before) if type(before) is str else before,
                         }
                     elif param == "available_after":
-                        filter_params["data"]["available_at"] = {"$gte": value}
+                        filter_params["data.available_at"] = {"$gte": value}
                     elif param == "available_before":
-                        filter_params["data"]["available_at"] = {"$lte": value}
+                        filter_params["data.available_at"] = {"$lte": value}
                     continue
 
                 if "percentage" in param:
                     if "percentages_greater_than" in kwargs and "percentages_less_than" in kwargs:
                         upper = kwargs["percentages_less_than"]
                         lower = kwargs["percentages_greater_than"]
-                        filter_params["data"]["available_at"] = {
+                        filter_params["data.percentage_correct"] = {
                             "$gt": lower,
                             "$lt": upper,
                         }
                     elif param == "percentages_less_than":
-                        filter_params["data"]["available_at"] = {"$lt": kwargs["percentages_less_than"], }
+                        filter_params["data.percentage_correct"] = {"$lt": kwargs["percentages_less_than"], }
 
                     elif param == "percentages_greater_than":
-                        filter_params["data"]["available_at"] = {"$gt": kwargs["percentages_greater_than"], }
+                        filter_params["data.percentage_correct"] = {"$gt": kwargs["percentages_greater_than"], }
                     continue
 
                 if type(value) in [str, int]:
@@ -462,13 +461,14 @@ class UserHandle:
 
                 if type(value) is bool:
                     url_params.append(f"{param}={str(value).lower()}")
-                    filter_params[param] = {"$not": None} if value else None
+                    filter_params[f"data.{param}"] = value
+                    filter_params[f"data.{param}_at"] = {"$ne": None} if value else None
                 else:
                     url_params.append(f"{param}={','.join(str(x) for x in value)}")
                     if param == "ids":
                         filter_params["id"] = {"$in": value}
                     elif param != "levels":
-                        filter_params["data"][param[0:-1]] = {"$in": value}
+                        filter_params[f"data.{param[0:-1]}"] = {"$in": value}
 
     @staticmethod
     def _convert_dates(obj: dict):
