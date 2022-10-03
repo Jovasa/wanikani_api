@@ -50,7 +50,29 @@ class UserHandle:
         return self._complex_request("assignment", **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
     def start_assignment(self, sid: int, started_at: Union[datetime, str, None] = None):
-        pass
+        data = {}
+        if started_at is not None:
+            if type(started_at) is str:
+                started_at = datetime.fromisoformat(started_at)
+            data["started_at"] = started_at.isoformat()
+
+        url = f"https://api.wanikani.com/v2/assignments/{sid}/start"
+        request = self._http.request(
+            "PUT",
+            url,
+            body=json.dumps(data).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+        )
+        d = json.loads(request.data.decode("utf-8"))
+        if request.status >= 400:
+            print(d)
+            raise ValueError
+
+        self._personal_cache.update_one({"id": sid, "object": "assignment"}, {"$set": d})
+        return d
 
     def get_level_progressions(self,
                                ids: [int, Iterable, None] = None,
@@ -70,9 +92,50 @@ class UserHandle:
         local_args = locals()
         return self._complex_request("review", **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
-    def create_review(self, aid: Union[int, None] = None, sid: Union[int, None] = None, **kwargs):
+    def create_review(self,
+                      incorrect_meaning_answers: int,
+                      incorrect_reading_answers: int,
+                      aid: Union[int, None] = None,
+                      sid: Union[int, None] = None,
+                      created_at: Union[datetime, str, None] = None):
         assert aid is not None or sid is not None
-        pass
+        assert aid is None or sid is None
+        data = {
+            "incorrect_meaning_answers": incorrect_meaning_answers,
+            "incorrect_reading_answers": incorrect_reading_answers,
+        }
+        if aid is not None:
+            data["assignment_id"] = aid
+        else:
+            data["subject_id"] = sid
+        if created_at is not None:
+            if type(created_at) is str:
+                created_at = datetime.fromisoformat(created_at)
+            data["started_at"] = created_at.isoformat()
+
+        request = self._http.request(
+            "POST",
+            "https://api.wanikani.com/v2/reviews/",
+            body=json.dumps(data).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+        )
+
+        d = json.loads(request.data.decode("utf-8"))
+        if request.status >= 400:
+            print(d)
+            raise ValueError
+        assignment = d["resources_updated"]["assignment"]
+        review_statistic = d["resources_updated"]["review_statistic"]
+        temp = {k: d[k] for k in d if k != "resources_updated"}
+        self._personal_cache.insert_one(temp)
+        self._personal_cache.update_one({"id": assignment["id"],
+                                         "object": "assignment"}, {"$set": assignment})
+        self._personal_cache.update_one({"id": review_statistic["id"],
+                                         "object": "review_statistic"}, {"$set": review_statistic})
+        return d
 
     def get_review_statistics(self,
                               *,
