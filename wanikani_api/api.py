@@ -342,6 +342,7 @@ class UserHandle:
         local_args = locals()
         self._parse_query_parameters(url_params,
                                      filter_args,
+                                     request_type == "assignment",
                                      **kwargs)
 
         is_singular = "ids" in kwargs and type(kwargs["ids"]) is int and len(url_params) == 1
@@ -405,7 +406,7 @@ class UserHandle:
         return data_out
 
     @staticmethod
-    def _parse_query_parameters(url_params: list, filter_params: dict, **kwargs):
+    def _parse_query_parameters(url_params: list, filter_params: dict, is_assignment, **kwargs):
         filter_params["data"] = {}
         for param, value in kwargs.items():
             if value is None:
@@ -461,8 +462,10 @@ class UserHandle:
 
                 if type(value) is bool:
                     url_params.append(f"{param}={str(value).lower()}")
-                    filter_params[f"data.{param}"] = value
-                    filter_params[f"data.{param}_at"] = {"$ne": None} if value else None
+                    if is_assignment:
+                        filter_params[f"data.{param}_at"] = {"$ne": None} if value else None
+                    else:
+                        filter_params[f"data.{param}"] = value
                 else:
                     url_params.append(f"{param}={','.join(str(x) for x in value)}")
                     if param == "ids":
