@@ -101,11 +101,66 @@ class UserHandle:
         return self._complex_request("study_material",
                                      **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
 
-    def create_study_material(self, sid: int, **kwargs):
-        pass
+    def create_study_material(self,
+                              sid: int,
+                              *,
+                              meaning_note: Union[str, None] = None,
+                              reading_note: Union[str, None] = None,
+                              meaning_synonyms: Union[List[str], None] = None
+                              ):
+        data = {
+            "subject_id": sid
+        }
+        for k in self.create_study_material.__kwdefaults__:
+            if (val := locals()[k]) is not None:
+                data[k] = val
 
-    def update_study_material(self, sid: int, **kwargs):
-        pass
+        request = self._http.request(
+            "POST",
+            "https://api.wanikani.com/v2/study_materials/",
+            body=json.dumps(data).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+        )
+        d = json.loads(request.data.decode("utf-8"))
+        if request.status >= 400:
+            print(d)
+            raise ValueError
+
+        print(d)
+        self._personal_cache.insert_one(d)
+        return d
+
+    def update_study_material(self, sid: int,
+                              *,
+                              meaning_note: Union[str, None] = None,
+                              reading_note: Union[str, None] = None,
+                              meaning_synonyms: Union[List[str], None] = None):
+        data = {}
+        for k in self.create_study_material.__kwdefaults__:
+            if (val := locals()[k]) is not None:
+                data[k] = val
+
+        request = self._http.request(
+            "PUT",
+            f"https://api.wanikani.com/v2/study_materials/{sid}",
+            body=json.dumps(data).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+        )
+        d = json.loads(request.data.decode("utf-8"))
+        if request.status >= 400:
+            print(d)
+            raise ValueError
+
+        print(d)
+        self._personal_cache.update_one({"id": sid,
+                                         "object": "study_material"}, {"$set": d})
+        return d
 
     def get_subjects(self,
                      *,
