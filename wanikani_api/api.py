@@ -4,6 +4,7 @@ import json
 import pprint
 from typing import AnyStr, Union, Iterable, Dict, List
 from datetime import datetime
+from os import environ
 from urllib.parse import quote
 
 import urllib3
@@ -12,7 +13,7 @@ from urllib3.exceptions import HTTPError
 
 
 class UserHandle:
-    mongodb_uri = "mongodb://localhost:27017"
+    mongodb_uri = environ.get("WANIKANI_API_MONGODB_URI") or "mongodb://localhost:27017"
     mongo_client = MongoClient(mongodb_uri)
     db = mongo_client["wanikani"]
 
