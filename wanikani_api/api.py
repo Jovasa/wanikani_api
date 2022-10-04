@@ -202,7 +202,7 @@ class UserHandle:
                               reading_note: Union[str, None] = None,
                               meaning_synonyms: Union[List[str], None] = None):
         data = {}
-        for k in self.create_study_material.__kwdefaults__:
+        for k in self.update_study_material.__kwdefaults__:
             if (val := locals()[k]) is not None:
                 data[k] = val
 
@@ -391,8 +391,34 @@ class UserHandle:
 
         return user
 
-    def update_user(self, **kwargs):
-        pass
+    def update_user(self,
+                    *,
+                    default_voice_actor_id: Union[int, None] = None,
+                    lessons_autoplay_audio: Union[bool, None] = None,
+                    lessons_batch_size: Union[int, None] = None,
+                    lessons_presentation_order: Union[str, None] = None,
+                    reviews_autoplay_audio: Union[bool, None] = None,
+                    reviews_display_srs_indicator: Union[bool, None] = None
+                    ):
+        temp_locals = locals()
+        data = {k: temp_locals[k] for k in self.update_user.__kwdefaults__ if temp_locals[k] is not None}
+        request = self._http.request(
+            "PUT",
+            f"https://api.wanikani.com/v2/user",
+            body=json.dumps(data).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+        )
+        d = json.loads(request.data.decode("utf-8"))
+        if request.status >= 400:
+            print(d)
+            raise ValueError
+
+        self._personal_cache.update_one({"_id": d["data"]["id"],
+                                         "object": "user"}, {"$set": d})
+        return d
 
     def get_voice_actors(self,
                          ids: Union[int, Iterable, None] = None,
