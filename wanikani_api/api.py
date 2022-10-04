@@ -90,7 +90,7 @@ class UserHandle:
                     subject_ids: Union[List[int], None] = None,
                     updated_after: Union[datetime, str, None] = None):
         local_args = locals()
-        return self._complex_request("review", **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
+        return self._complex_request("review", **{k: local_args[k] for k in self.get_reviews.__kwdefaults__})
 
     def create_review(self,
                       incorrect_meaning_answers: int,
@@ -148,7 +148,7 @@ class UserHandle:
                               updated_after: Union[datetime, str, None] = None):
         local_args = locals()
         return self._complex_request("review_statistic",
-                                     **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
+                                     **{k: local_args[k] for k in self.get_review_statistics.__kwdefaults__})
 
     def get_srs_systems(self, ids: Union[int, Iterable, None] = None, updated_after: Union[datetime, str, None] = None):
         return self._ids_updated_after_request(ids, updated_after, "spaced_repetition_system")
@@ -162,7 +162,7 @@ class UserHandle:
                             updated_after: Union[datetime, str, None] = None):
         local_args = locals()
         return self._complex_request("study_material",
-                                     **{k: local_args[k] for k in self.get_assignments.__kwdefaults__})
+                                     **{k: local_args[k] for k in self.get_study_materials.__kwdefaults__})
 
     def create_study_material(self,
                               sid: int,
