@@ -552,7 +552,6 @@ class UserHandle:
 
     @staticmethod
     def _parse_query_parameters(url_params: list, filter_params: dict, is_assignment, **kwargs):
-        filter_params["data"] = {}
         for param, value in kwargs.items():
             if value is None:
                 continue
