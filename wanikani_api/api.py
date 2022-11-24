@@ -3,13 +3,28 @@ from __future__ import annotations
 import json
 import pprint
 from typing import AnyStr, Union, Iterable, Dict, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from os import environ
 from urllib.parse import quote
+from collections import deque
 
 import urllib3
 from pymongo import MongoClient
 from urllib3.exceptions import HTTPError
+
+
+class RateLimiter:
+    def __init__(self):
+        self.requests = deque()
+
+    def can_request(self) -> bool:
+        now = datetime.now()
+        while self.requests and now - self.requests[0] > timedelta(minutes=1):
+            self.requests.popleft()
+        if len(self.requests) >= 60:
+            return False
+        self.requests.append(now)
+        return True
 
 
 class UserHandle:
@@ -619,7 +634,7 @@ class UserHandle:
 
     @staticmethod
     def _convert_dates(obj: dict):
-        obj["data_updated_at"] = datetime.fromisoformat(obj["data_updated_at"].replace("Z", "+00:00"))
+        obj["data_updated_at"] = datetime.fromisoformat(obj["data_updated_at"].replace("Z", ""))
         for key, value in obj["data"].items():
             if key.endswith("_at") and value is not None:
-                obj["data"][key] = datetime.fromisoformat(obj["data"][key].replace("Z", "+00:00"))
+                obj["data"][key] = datetime.fromisoformat(obj["data"][key].replace("Z", ""))
