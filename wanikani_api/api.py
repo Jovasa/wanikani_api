@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pprint
+from time import sleep
 from typing import AnyStr, Union, Iterable, Dict, List
 from datetime import datetime, timedelta
 from os import environ
@@ -13,6 +14,30 @@ from pymongo import MongoClient
 from urllib3.exceptions import HTTPError
 
 
+class WanikaniApiBaseException(Exception):
+    pass
+
+
+class WanikaniRateLimitError(WanikaniApiBaseException):
+    pass
+
+
+class WanikaniConnectionError(WanikaniApiBaseException):
+    pass
+
+
+class WanikaniInvalidTokenError(WanikaniApiBaseException):
+    pass
+
+
+class WanikaniRequestError(WanikaniApiBaseException):
+    def __init__(self, code):
+        self.code = code
+
+    def __str__(self):
+        return f"Wanikani returned error code: {self.code}"
+
+
 class RateLimiter:
     def __init__(self):
         self.requests = deque()
@@ -21,16 +46,31 @@ class RateLimiter:
         now = datetime.now()
         while self.requests and now - self.requests[0] > timedelta(minutes=1):
             self.requests.popleft()
-        if len(self.requests) >= 60:
+        if len(self.requests) >= 3:
             return False
         self.requests.append(now)
         return True
+
+    def sleep_until_can_request(self):
+        if not self.can_request():
+            until = (self.requests[0] + timedelta(minutes=1)) - datetime.now()
+            print(until.seconds, until.microseconds)
+            sleep(until.seconds + until.microseconds / 1e6)
+
+
+def _raise_error(request):
+    if request.status == 429:
+        raise WanikaniRateLimitError()
+    if request.status == 403 or request.status == 401:
+        raise WanikaniInvalidTokenError
+    raise WanikaniRequestError(request.status)
 
 
 class UserHandle:
     mongodb_uri = environ.get("WANIKANI_API_MONGODB_URI") or "mongodb://localhost:27017"
     mongo_client = MongoClient(mongodb_uri)
     db = mongo_client["wanikani"]
+    rate_limiter = RateLimiter()
 
     def __init__(self, token: AnyStr):
         self._token = token
@@ -73,6 +113,8 @@ class UserHandle:
             data["started_at"] = started_at.isoformat()
 
         url = f"https://api.wanikani.com/v2/assignments/{sid}/start"
+        if not self.rate_limiter.can_request():
+            raise WanikaniRateLimitError()
         request = self._http.request(
             "PUT",
             url,
@@ -84,8 +126,7 @@ class UserHandle:
         )
         d = json.loads(request.data.decode("utf-8"))
         if request.status >= 400:
-            print(d)
-            raise ValueError
+            _raise_error(request)
 
         self._personal_cache.update_one({"id": sid, "object": "assignment"}, {"$set": d})
         return d
@@ -129,6 +170,8 @@ class UserHandle:
                 created_at = datetime.fromisoformat(created_at)
             data["started_at"] = created_at.isoformat()
 
+        if not self.rate_limiter.can_request():
+            raise WanikaniRateLimitError()
         request = self._http.request(
             "POST",
             "https://api.wanikani.com/v2/reviews/",
@@ -139,10 +182,10 @@ class UserHandle:
             }
         )
 
-        d = json.loads(request.data.decode("utf-8"))
         if request.status >= 400:
-            print(d)
-            raise ValueError
+            _raise_error(request)
+
+        d = json.loads(request.data.decode("utf-8"))
         assignment = d["resources_updated"]["assignment"]
         review_statistic = d["resources_updated"]["review_statistic"]
         temp = {k: d[k] for k in d if k != "resources_updated"}
@@ -194,6 +237,8 @@ class UserHandle:
             if (val := locals()[k]) is not None:
                 data[k] = val
 
+        if not self.rate_limiter.can_request():
+            raise WanikaniRateLimitError()
         request = self._http.request(
             "POST",
             "https://api.wanikani.com/v2/study_materials/",
@@ -203,12 +248,10 @@ class UserHandle:
                 'Content-Type': 'application/json; charset=utf-8'
             }
         )
-        d = json.loads(request.data.decode("utf-8"))
         if request.status >= 400:
-            print(d)
-            raise ValueError
+            _raise_error(request)
+        d = json.loads(request.data.decode("utf-8"))
 
-        print(d)
         self._personal_cache.insert_one(d)
         return d
 
@@ -222,6 +265,8 @@ class UserHandle:
             if (val := locals()[k]) is not None:
                 data[k] = val
 
+        if not self.rate_limiter.can_request():
+            raise WanikaniRateLimitError()
         request = self._http.request(
             "PUT",
             f"https://api.wanikani.com/v2/study_materials/{sid}",
@@ -231,12 +276,10 @@ class UserHandle:
                 'Content-Type': 'application/json; charset=utf-8'
             }
         )
-        d = json.loads(request.data.decode("utf-8"))
         if request.status >= 400:
-            print(d)
-            raise ValueError
+            _raise_error(request)
+        d = json.loads(request.data.decode("utf-8"))
 
-        print(d)
         self._personal_cache.update_one({"id": sid,
                                          "object": "study_material"}, {"$set": d})
         return d
@@ -292,11 +335,16 @@ class UserHandle:
                 headers["If-Modified-Since"] = etags["Last-Modified"]
                 headers["If-None-Match"] = etags["ETag"]
 
+            if not self.rate_limiter.can_request():
+                self.rate_limiter.sleep_until_can_request()
             request = self._http.request(
                 "GET",
                 url,
                 headers=headers
             )
+
+            if request.status >= 400:
+                _raise_error(request.status)
 
             # Technically this could cause issues if the first url would not have 304
             # but the second does have, but I don't think that is a feasible case in
@@ -352,6 +400,9 @@ class UserHandle:
             # TODO: This should be custom error
             raise
 
+        if request.status >= 400:
+            _raise_error(request.status)
+
         if request.status == 304:
             return self._personal_cache.find_one({"object": "report"})
 
@@ -365,6 +416,9 @@ class UserHandle:
         user_db = self.db["users"]
         url = "https://api.wanikani.com/v2/user"
         headers = self._get_header(url)
+
+        if not self.rate_limiter.can_request():
+            raise WanikaniRateLimitError()
         try:
             request = self._http.request(
                 "GET",
@@ -379,6 +433,9 @@ class UserHandle:
                 return user
             # TODO: This should be custom error
             raise
+
+        if request.status >= 400:
+            _raise_error(request.status)
 
         if request.status == 304:
             return user_db.find_one({"tokens": {"$in": [self._token]}})
@@ -418,6 +475,9 @@ class UserHandle:
                     ):
         temp_locals = locals()
         data = {k: temp_locals[k] for k in self.update_user.__kwdefaults__ if temp_locals[k] is not None}
+
+        if not self.rate_limiter.can_request():
+            raise WanikaniRateLimitError()
         request = self._http.request(
             "PUT",
             f"https://api.wanikani.com/v2/user",
@@ -427,10 +487,11 @@ class UserHandle:
                 'Content-Type': 'application/json; charset=utf-8'
             }
         )
-        d = json.loads(request.data.decode("utf-8"))
+
         if request.status >= 400:
-            print(d)
-            raise ValueError
+            _raise_error(request.status)
+
+        d = json.loads(request.data.decode("utf-8"))
 
         self._personal_cache.update_one({"_id": d["data"]["id"],
                                          "object": "user"}, {"$set": d})
@@ -532,17 +593,22 @@ class UserHandle:
         while url:
             headers = self._get_header(url)
 
+            if not self.rate_limiter.can_request():
+                self.rate_limiter.sleep_until_can_request()
+
             request = self._http.request(
                 "GET",
                 url,
                 headers=headers
             )
 
+            if request.status >= 400:
+                _raise_error(request.status)
+
             # Technically this could cause issues if the first url would not have 304
             # but the second does have, but I don't think that is a feasible case in
             # real world. Like the API should return 200 for all the data.
             if request.status == 304:
-                print("Was cached")
                 return cached
 
             data = json.loads(request.data.decode("utf-8"))
