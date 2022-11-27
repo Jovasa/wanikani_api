@@ -532,7 +532,8 @@ class UserHandle:
                                    ids: Union[int, Iterable, None],
                                    updated_after: Union[datetime, str, None],
                                    request_type: str):
-        if type(ids) is int and updated_after is None:
+        is_singular = type(ids) is int and updated_after is None
+        if is_singular:
             url = f"https://api.wanikani.com/v2/{request_type}s/{ids}"
             cached = self._personal_cache.find_one({"object": request_type, "id": ids})
         else:
@@ -555,7 +556,7 @@ class UserHandle:
 
             cached = self._personal_cache.find(filter_args)
 
-        return self._do_requests(cached, request_type, url)
+        return self._do_requests(cached, request_type, url, is_singular)
 
     def _complex_request(self, request_type, **kwargs):
         url_params = []
@@ -586,9 +587,9 @@ class UserHandle:
             else:
                 cached = self._personal_cache.find(filter_args)
 
-        return self._do_requests(cached, request_type, url, can_use_cache)
+        return self._do_requests(cached, request_type, url, is_singular, can_use_cache)
 
-    def _do_requests(self, cached, request_type, url, can_use_cache=True):
+    def _do_requests(self, cached, request_type, url, is_singular, can_use_cache=True):
         data_out = []
         while url:
             headers = self._get_header(url)
@@ -629,7 +630,7 @@ class UserHandle:
             self._personal_cache.update_one({"object": request_type, "id": item["id"]},
                                             {"$set": item},
                                             upsert=True)
-        return data_out
+        return data_out if is_singular else cached
 
     @staticmethod
     def _parse_query_parameters(url_params: list, filter_params: dict, is_assignment, **kwargs):
