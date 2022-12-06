@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import pprint
 from time import sleep
 from typing import AnyStr, Union, Iterable, Dict, List
 from datetime import datetime, timedelta
@@ -54,7 +53,6 @@ class RateLimiter:
     def sleep_until_can_request(self):
         if not self.can_request():
             until = (self.requests[0] + timedelta(minutes=1)) - datetime.now()
-            print(until.seconds, until.microseconds)
             sleep(until.seconds + until.microseconds / 1e6)
 
 
@@ -320,6 +318,20 @@ class UserHandle:
             filter_args["data_updated_at"] = {"$gte": updated_after}
 
         is_singular = type(ids) is int and len(url_params) == 1
+
+        params_string = '&'.join(url_params)
+        if is_singular:
+            url_without_update_date = f"https://api.wanikani.com/v2/subjects/{ids}"
+        else:
+            url_without_update_date = f"https://api.wanikani.com/v2/subjects{'?' if url_params else ''}{params_string}"
+
+        updated_after = self._personal_cache.find_one({
+            "object": "url_update",
+            "url": url_without_update_date
+        })
+        if updated_after:
+            url_params.append(f"updated_after={quote(updated_after['date'].isoformat())}")
+
         if not is_singular:
             params_string = '&'.join(url_params)
             url = f"https://api.wanikani.com/v2/subjects{'?' if url_params else ''}{params_string}"
@@ -353,7 +365,6 @@ class UserHandle:
                 return cached
 
             data = json.loads(request.data.decode("utf-8"))
-            pprint.pprint(request.headers)
 
             try:
                 last_modified = request.headers["Last-Modified"]
@@ -380,6 +391,15 @@ class UserHandle:
             self._subject_cache.update_one({"object": item["object"], "id": item["id"]},
                                            {"$set": item},
                                            upsert=True)
+        self._personal_cache.update_one(
+            {"object": "url_update"},
+            {"$set": {
+                "object": "url_update",
+                "url": url_without_update_date,
+                "date": datetime.utcnow()
+            }},
+            upsert=True)
+
         return data_out
 
     def get_summary(self):
@@ -536,6 +556,7 @@ class UserHandle:
         if is_singular:
             url = f"https://api.wanikani.com/v2/{request_type}s/{ids}"
             cached = self._personal_cache.find_one({"object": request_type, "id": ids})
+            url_params = []
         else:
             url_params = []
             filter_args = {"object": request_type}
@@ -551,12 +572,11 @@ class UserHandle:
                 url_params.append(f"updated_after={quote(updated_after.isoformat())}")
                 filter_args["data_updated_at"] = {"$gte": updated_after}
 
-            params_string = '&'.join(url_params)
-            url = f"https://api.wanikani.com/v2/{request_type}s{'?' if url_params else ''}{params_string}"
+            url = f"https://api.wanikani.com/v2/{request_type}s"
 
             cached = self._personal_cache.find(filter_args)
 
-        return self._do_requests(cached, request_type, url, is_singular)
+        return self._do_requests(cached, request_type, url, url_params, is_singular)
 
     def _complex_request(self, request_type, **kwargs):
         url_params = []
@@ -570,7 +590,7 @@ class UserHandle:
         is_singular = "ids" in kwargs and type(kwargs["ids"]) is int and len(url_params) == 1
         if not is_singular:
             params_string = '&'.join(url_params)
-            url = f"https://api.wanikani.com/v2/{request_type}s{'?' if url_params else ''}{params_string}"
+            url = f"https://api.wanikani.com/v2/{request_type}s"
         else:
             url = f"https://api.wanikani.com/v2/{request_type}s/{kwargs['ids']}"
 
@@ -587,10 +607,23 @@ class UserHandle:
             else:
                 cached = self._personal_cache.find(filter_args)
 
-        return self._do_requests(cached, request_type, url, is_singular, can_use_cache)
+        return self._do_requests(cached, request_type, url, url_params, is_singular, can_use_cache)
 
-    def _do_requests(self, cached, request_type, url, is_singular, can_use_cache=True):
+    def _do_requests(self, cached, request_type, base_url, url_params, is_singular, can_use_cache=True):
         data_out = []
+
+        params_string = '&'.join(url_params)
+        url_without_update_date = f"{base_url}{'?' if url_params else ''}{params_string}"
+
+        updated_after = self._personal_cache.find_one({
+            "object": "url_update",
+            "url": url_without_update_date
+        })
+        if updated_after:
+            url_params.append(f"updated_after={quote(updated_after['date'].isoformat())}")
+
+        params_string = '&'.join(url_params)
+        url = f"{base_url}{'?' if url_params else ''}{params_string}"
         while url:
             headers = self._get_header(url)
 
@@ -630,6 +663,16 @@ class UserHandle:
             self._personal_cache.update_one({"object": request_type, "id": item["id"]},
                                             {"$set": item},
                                             upsert=True)
+
+        self._personal_cache.update_one(
+            {"object": "url_update"},
+            {"$set": {
+                "object": "url_update",
+                "url": url_without_update_date,
+                "date": datetime.utcnow()
+            }},
+            upsert=True)
+
         return data_out if is_singular else cached
 
     @staticmethod
